@@ -1,0 +1,8 @@
+# Use the project virtual environment in VS Code for consistent imports.
+opencv-python==4.13.0.92
+numpy==2.5.0
+pandas==3.0.3
+PySide6==6.11.1
+reverse_geocoder==1.5.1
+openpyxl==3.1.5
+requests==2.34.2
