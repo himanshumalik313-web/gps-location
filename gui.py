@@ -267,7 +267,7 @@ class MainWindow(QWidget):
                 "enabled": enabled_box,
                 "text": text_box,
                 "x": x_box,
-                "y": y_box,
+
                 "angle": angle_box,
                 "size": size_box,
                 "font": font_box,
