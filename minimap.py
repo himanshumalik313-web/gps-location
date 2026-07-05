@@ -178,7 +178,7 @@ class MiniMapRenderer:
         return crop
 
     def paste_onto(self, frame, lat, lon, heading_deg=0,
-                   position="top-right", margin=10):
+                   position="top-right", margin=10, x=None, y=None):
         """
         Paste the mini-map inset onto a video frame.
         position: 'top-right', 'top-left', 'bottom-right', 'bottom-left'
@@ -187,7 +187,10 @@ class MiniMapRenderer:
         h, w = frame.shape[:2]
         s = self.map_size
 
-        if position == "top-right":
+        if x is not None and y is not None:
+            x = max(0, min(int(x), max(0, w - s)))
+            y = max(0, min(int(y), max(0, h - s)))
+        elif position == "top-right":
             x, y = w - s - margin, margin
         elif position == "top-left":
             x, y = margin, margin

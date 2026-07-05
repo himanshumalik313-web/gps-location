@@ -2,7 +2,7 @@ import os
 from video_io import VideoReader, VideoWriter
 from gps_data import GPSData
 from sync import synchronize
-from overlay import OverlayRenderer
+from overlay import OverlayRenderer, draw_border_banner, draw_guides, resolve_color
 from geocode import reverse_geocode
 from minimap import MiniMapRenderer
 import ai_localize
@@ -16,15 +16,40 @@ DEFAULT_FIELDS = {
     "timestamp": False,
     "place": False,
     "font_scale": 0.6,
+    "overlay_line_spacing": 0,
     "alpha": 0.5,
     "show_src_info": False,
+    "guide_enabled": True,
+    "guide_offset": 150,
+    "guide_center_color": "yellow",
+    "guide_side_color": "white",
+    "guide_thickness": 3,
+    "guide_dash_length": 18,
+    "guide_gap_length": 14,
+    "guide_length_pct": 0.85,
+    "guide_center_label": "CL",
+    "guide_left_label": "LEFT",
+    "guide_right_label": "RIGHT",
+    "guide_label_font_scale": 0.7,
+    "guide_label_thickness": 1,
+    "banner_enabled": False,
+    "banner_height": 72,
+    "banner_color": "black",
+    "banner_alpha": 0.45,
+    "banner_border_color": "white",
+    "banner_border_thickness": 1,
+    "banner_texts": [],
     "minimap_enabled": False,
     "minimap_zoom": 16,
     "minimap_size": 200,
     "minimap_position": "top-right",
+    "minimap_custom_position": False,
+    "minimap_x": None,
+    "minimap_y": None,
     "minimap_marker_shape": "triangle",
     "minimap_marker_color": "red",
     "minimap_trail_thickness": 4,
+    "minimap_trail_color": "red",
     "minimap_source": "satellite",
     "position": "bottom-left",
     "distance": False,
@@ -56,6 +81,7 @@ def run(video_path, gps_path, output_path, fields, frame_interval=1, enable_ai=F
         font_scale=fields.get("font_scale", 0.6),
         position=fields.get("position", "bottom-left"),
         alpha=fields.get("alpha", 0.5),
+        line_spacing=fields.get("overlay_line_spacing", 0),
     )
     minimap = MiniMapRenderer(
         zoom=int(fields.get("minimap_zoom", 16)),
@@ -63,11 +89,29 @@ def run(video_path, gps_path, output_path, fields, frame_interval=1, enable_ai=F
         marker_shape=fields.get("minimap_marker_shape", "triangle"),
         marker_color=_MINIMAP_COLOR_MAP.get(fields.get("minimap_marker_color", "red"), (0, 0, 255)),
         trail_thickness=int(fields.get("minimap_trail_thickness", 4)),
+        trail_color=_MINIMAP_COLOR_MAP.get(fields.get("minimap_trail_color", "red"), (0, 0, 255)),
         source=fields.get("minimap_source", "satellite"),
     ) if fields.get("minimap_enabled") else None
     place_cache = {}
 
     for idx, ts, frame in reader.frames():
+        if fields.get("guide_enabled"):
+            frame = draw_guides(
+                frame,
+                offset_x=int(fields.get("guide_offset", 150)),
+                cl_color=resolve_color(fields.get("guide_center_color", "yellow")),
+                row_color=resolve_color(fields.get("guide_side_color", "white")),
+                thickness=int(fields.get("guide_thickness", 3)),
+                dash_length=int(fields.get("guide_dash_length", 18)),
+                gap_length=int(fields.get("guide_gap_length", 14)),
+                length_pct=float(fields.get("guide_length_pct", 0.85)),
+                cl_label=str(fields.get("guide_center_label", "CL")),
+                left_label=str(fields.get("guide_left_label", "LEFT")),
+                right_label=str(fields.get("guide_right_label", "RIGHT")),
+                label_font_scale=float(fields.get("guide_label_font_scale", 0.7)),
+                label_thickness=int(fields.get("guide_label_thickness", 1)),
+            )
+
         row = None
         if sync_df is not None and idx in sync_df.index:
             row = sync_df.loc[idx]
@@ -90,6 +134,8 @@ def run(video_path, gps_path, output_path, fields, frame_interval=1, enable_ai=F
             frame = overlay.draw(frame, lines)
 
             if minimap is not None:
+                minimap_x = fields.get("minimap_x")
+                minimap_y = fields.get("minimap_y")
                 frame = minimap.paste_onto(
                     frame,
                     lat=row["Latitude"],
@@ -97,7 +143,20 @@ def run(video_path, gps_path, output_path, fields, frame_interval=1, enable_ai=F
                     heading_deg=row.get("Heading_deg", 0),
                     position=fields.get("minimap_position", "top-right"),
                     margin=10,
+                    x=int(minimap_x) if minimap_x is not None else None,
+                    y=int(minimap_y) if minimap_y is not None else None,
                 )
+
+        if fields.get("banner_enabled"):
+            frame = draw_border_banner(
+                frame,
+                height=int(fields.get("banner_height", 72)),
+                color=resolve_color(fields.get("banner_color", "black")),
+                alpha=float(fields.get("banner_alpha", 0.45)),
+                border_color=resolve_color(fields.get("banner_border_color", "white")),
+                border_thickness=int(fields.get("banner_border_thickness", 1)),
+                texts=fields.get("banner_texts", []),
+            )
 
         writer.write(frame)
 
