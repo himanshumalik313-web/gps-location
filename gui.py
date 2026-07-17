@@ -1,7 +1,8 @@
 import sys
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel, QProgressBar,
-    QDoubleSpinBox, QCheckBox, QComboBox, QSpinBox, QLineEdit, QScrollArea, QHBoxLayout
+    QDoubleSpinBox, QCheckBox, QComboBox, QSpinBox, QLineEdit, QScrollArea, QHBoxLayout,
+    QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import QThread, Signal
 import main as pipeline
@@ -12,24 +13,30 @@ class Worker(QThread):
     error = Signal(str)
     progress = Signal(int, int)
 
-    def __init__(self, video, gps, output, fields=None):
+    def __init__(self, clips, output, fields=None, join_search_sec=15.0, crossfade_frames=6):
         super().__init__()
-        self.video, self.gps, self.output = video, gps, output
+        self.clips = clips  # list of (video_path, gps_path)
+        self.output = output
         self.fields = fields or {}
+        self.join_search_sec = join_search_sec
+        self.crossfade_frames = crossfade_frames
 
     def run(self):
         try:
             fields = pipeline.DEFAULT_FIELDS.copy()
             fields.update(self.fields)
-            # include source file base names for optional display
             import os
-            if self.video:
-                fields["video_name"] = os.path.basename(self.video)
-            if self.gps:
-                fields["gps_name"] = os.path.basename(self.gps)
-
-            pipeline.run(self.video, self.gps, self.output, fields,
-                         progress_callback=lambda i, total: self.progress.emit(i, total))
+            if len(self.clips) == 1:
+                video, gps = self.clips[0]
+                fields["video_name"] = os.path.basename(video)
+                fields["gps_name"] = os.path.basename(gps) if gps else None
+                pipeline.run(video, gps, self.output, fields,
+                             progress_callback=lambda i, total: self.progress.emit(i, total))
+            else:
+                pipeline.run_multi(self.clips, self.output, fields,
+                                    join_search_sec=self.join_search_sec,
+                                    crossfade_frames=self.crossfade_frames,
+                                    progress_callback=lambda i, total: self.progress.emit(i, total))
             self.finished.emit()
         except Exception as e:
             self.error.emit(str(e))
@@ -39,10 +46,13 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Drone Geo-Tagger")
         self.resize(900, 1020)
-        self.video_path = None
-        self.gps_path = None
+        self.clips = []  # list of (video_path, gps_path) in join order
         self.output_path = "output_geotagged.mp4"
+        self.join_search_sec = 15.0
+        self.crossfade_frames = 6
         self.font_scale = 0.6
+        self.bold = bool(pipeline.DEFAULT_FIELDS.get("bold", False))
+        self.boldness = int(pipeline.DEFAULT_FIELDS.get("boldness", 2))
         self.alpha = 0.5
         self.overlay_line_spacing = 6
         self.position = pipeline.DEFAULT_FIELDS.get("position", "bottom-left")
@@ -86,15 +96,37 @@ class MainWindow(QWidget):
         scroll.setWidget(content)
         outer_layout.addWidget(scroll)
 
-        self.video_label = QLabel("No video selected")
-        self.gps_label = QLabel("No GPS/SRT file selected (optional)")
+        self.clip_list_label = QLabel("Clips (in join order):")
+        self.clip_list = QListWidget()
         self.output_label = QLabel(f"Output: {self.output_path}")
 
-        video_btn = QPushButton("📁 Browse for Drone Video")
-        video_btn.clicked.connect(self.select_video)
+        add_clip_btn = QPushButton("➕ Add Video + GPS/SRT Clip")
+        add_clip_btn.clicked.connect(self.add_clip)
 
-        gps_btn = QPushButton("📁 Browse for GPS File (Optional)")
-        gps_btn.clicked.connect(self.select_gps)
+        remove_clip_btn = QPushButton("➖ Remove Selected Clip")
+        remove_clip_btn.clicked.connect(self.remove_selected_clip)
+
+        move_up_btn = QPushButton("⬆ Move Up")
+        move_up_btn.clicked.connect(lambda: self.move_clip(-1))
+        move_down_btn = QPushButton("⬇ Move Down")
+        move_down_btn.clicked.connect(lambda: self.move_clip(1))
+
+        clip_btn_row = QWidget()
+        clip_btn_layout = QHBoxLayout(clip_btn_row)
+        for b in (add_clip_btn, remove_clip_btn, move_up_btn, move_down_btn):
+            clip_btn_layout.addWidget(b)
+
+        self.join_search_label = QLabel("Join search window (sec)")
+        self.join_search_box = QDoubleSpinBox()
+        self.join_search_box.setRange(1.0, 120.0)
+        self.join_search_box.setValue(self.join_search_sec)
+        self.join_search_box.valueChanged.connect(lambda v: setattr(self, 'join_search_sec', float(v)))
+
+        self.crossfade_label = QLabel("Crossfade frames at join")
+        self.crossfade_box = QSpinBox()
+        self.crossfade_box.setRange(0, 60)
+        self.crossfade_box.setValue(self.crossfade_frames)
+        self.crossfade_box.valueChanged.connect(lambda v: setattr(self, 'crossfade_frames', int(v)))
 
         output_btn = QPushButton("📁 Choose Output Location")
         output_btn.clicked.connect(self.select_output)
@@ -105,6 +137,16 @@ class MainWindow(QWidget):
         self.font_size.setSingleStep(0.1)
         self.font_size.setValue(self.font_scale)
         self.font_size.valueChanged.connect(self.on_font_size_changed)
+
+        self.bold_check = QCheckBox("Bold overlay text")
+        self.bold_check.setChecked(self.bold)
+        self.bold_check.stateChanged.connect(lambda v: setattr(self, 'bold', bool(v)))
+
+        self.boldness_label = QLabel("Boldness")
+        self.boldness_box = QSpinBox()
+        self.boldness_box.setRange(1, 12)
+        self.boldness_box.setValue(self.boldness)
+        self.boldness_box.valueChanged.connect(lambda v: setattr(self, 'boldness', int(v)))
 
         self.alpha_label = QLabel("Text background transparency")
         self.alpha_spin = QDoubleSpinBox()
@@ -267,7 +309,7 @@ class MainWindow(QWidget):
                 "enabled": enabled_box,
                 "text": text_box,
                 "x": x_box,
-
+                "y": y_box,
                 "angle": angle_box,
                 "size": size_box,
                 "font": font_box,
@@ -348,8 +390,11 @@ class MainWindow(QWidget):
         self.progress.setRange(0, 100)
         self.progress.hide()
 
-        for w in (video_btn, self.video_label, gps_btn, self.gps_label,
+        for w in (self.clip_list_label, self.clip_list, clip_btn_row,
+                  self.join_search_label, self.join_search_box,
+                  self.crossfade_label, self.crossfade_box,
                   output_btn, self.output_label, self.font_label, self.font_size,
+                  self.bold_check, self.boldness_label, self.boldness_box,
                   self.alpha_label, self.alpha_spin, self.position_label, self.position_box,
                   self.overlay_line_spacing_label, self.overlay_line_spacing_box,
                   self.chk_timestamp, self.chk_altitude, self.chk_place, self.chk_speed, self.chk_heading,
@@ -385,21 +430,44 @@ class MainWindow(QWidget):
                   self.start_btn, self.progress):
             layout.addWidget(w)
 
-    def select_video(self):
-        path, _ = QFileDialog.getOpenFileName(
+    def add_clip(self):
+        video_path, _ = QFileDialog.getOpenFileName(
             self, "Select Drone Video", "", "Videos (*.mp4 *.mov *.avi *.mkv)"
         )
-        if path:
-            self.video_path = path
-            self.video_label.setText(f"Video: {path.split('/')[-1]}")
-
-    def select_gps(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select GPS File", "", "Data Files (*.csv *.xlsx *.json *.txt *.srt)"
+        if not video_path:
+            return
+        gps_path, _ = QFileDialog.getOpenFileName(
+            self, "Select matching GPS/SRT File", "", "Data Files (*.csv *.xlsx *.json *.txt *.srt)"
         )
-        if path:
-            self.gps_path = path
-            self.gps_label.setText(f"GPS/SRT: {path.split('/')[-1]}")
+        if not gps_path:
+            self.output_label.setText("⚠ Each clip needs a GPS/SRT file for auto-join to work.")
+            return
+        self.clips.append((video_path, gps_path))
+        label = f"{len(self.clips)}. {video_path.split('/')[-1]}  ⟷  {gps_path.split('/')[-1]}"
+        self.clip_list.addItem(QListWidgetItem(label))
+
+    def remove_selected_clip(self):
+        row = self.clip_list.currentRow()
+        if row < 0:
+            return
+        self.clip_list.takeItem(row)
+        del self.clips[row]
+        self._renumber_clip_list()
+
+    def move_clip(self, direction):
+        row = self.clip_list.currentRow()
+        new_row = row + direction
+        if row < 0 or not (0 <= new_row < len(self.clips)):
+            return
+        self.clips[row], self.clips[new_row] = self.clips[new_row], self.clips[row]
+        self._renumber_clip_list()
+        self.clip_list.setCurrentRow(new_row)
+
+    def _renumber_clip_list(self):
+        self.clip_list.clear()
+        for i, (v, g) in enumerate(self.clips, start=1):
+            label = f"{i}. {v.split('/')[-1]}  ⟷  {g.split('/')[-1]}"
+            self.clip_list.addItem(QListWidgetItem(label))
 
     def select_output(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -446,8 +514,8 @@ class MainWindow(QWidget):
             self.chk_distance_km.setChecked(False)
 
     def start(self):
-        if not self.video_path:
-            self.video_label.setText("⚠ Please select a video first.")
+        if not self.clips:
+            self.output_label.setText("⚠ Add at least one video + GPS/SRT clip first.")
             return
         self.progress.show()
         self.progress.setValue(0)
@@ -455,6 +523,8 @@ class MainWindow(QWidget):
         # Build the fields dict from UI controls
         fields = pipeline.DEFAULT_FIELDS.copy()
         fields["font_scale"] = float(self.font_size.value())
+        fields["bold"] = bool(self.bold_check.isChecked())
+        fields["boldness"] = int(self.boldness_box.value())
         fields["alpha"] = float(self.alpha_spin.value())
         fields["overlay_line_spacing"] = int(self.overlay_line_spacing_box.value())
         fields["position"] = str(self.position_box.currentText())
@@ -513,7 +583,9 @@ class MainWindow(QWidget):
         fields["minimap_x"] = int(self.minimap_x_box.value()) if self.minimap_custom_pos_check.isChecked() else None
         fields["minimap_y"] = int(self.minimap_y_box.value()) if self.minimap_custom_pos_check.isChecked() else None
 
-        self.worker = Worker(self.video_path, self.gps_path, self.output_path, fields)
+        self.worker = Worker(self.clips, self.output_path, fields,
+                              join_search_sec=self.join_search_sec,
+                              crossfade_frames=self.crossfade_frames)
         self.worker.progress.connect(self.on_progress)
         self.worker.finished.connect(self.on_done)
         self.worker.error.connect(self.on_error)

@@ -106,8 +106,9 @@ def draw_guides(frame, offset_x=150, cl_color=(0, 220, 255), row_color=(220, 220
                 label_font_scale=0.7, label_thickness=1):
     h, w = frame.shape[:2]
     cx = w // 2
-    y1 = int(h * (1 - float(length_pct)) / 2)
-    y2 = h - y1
+    y2 = h - 1                                    # bottom stays fixed at the frame edge
+    y1 = h - int(h * float(length_pct))           # top moves as length_pct changes
+    y1 = max(0, y1)
 
     _dashed_vline(frame, cx, y1, y2, cl_color, thickness, dash_length, gap_length)
     _dashed_vline(frame, cx - int(offset_x), y1, y2, row_color, thickness, dash_length, gap_length)
@@ -164,7 +165,8 @@ POSITIONS = {
 
 class OverlayRenderer:
     def __init__(self, font_scale=0.6, color=(255, 255, 255), bg=True,
-                 position="bottom-left", thickness=1, alpha=0.5, line_spacing=0):
+                 position="bottom-left", thickness=1, alpha=0.5, line_spacing=0,
+                 bold=False, boldness=2):
         self.font = cv2.FONT_HERSHEY_SIMPLEX
         self.font_scale = font_scale
         self.color = color
@@ -173,6 +175,12 @@ class OverlayRenderer:
         self.thickness = thickness
         self.alpha = float(alpha)
         self.line_spacing = int(line_spacing)
+        self.bold = bool(bold)
+        self.boldness = int(boldness)
+
+    def _text_thickness(self):
+        # "Fake bold" = extra stroke thickness. OpenCV has no true bold font.
+        return self.thickness + (self.boldness if self.bold else 0)
 
     def build_lines(self, row, fields: dict, place: dict | None):
         lines = []
@@ -208,7 +216,8 @@ class OverlayRenderer:
     def draw(self, frame, lines):
         h, w = frame.shape[:2]
         line_height = 22 + max(0, int(self.line_spacing))
-        sizes = [cv2.getTextSize(l, self.font, self.font_scale, self.thickness)[0] for l in lines]
+        thick = self._text_thickness
+        sizes = [cv2.getTextSize(l, self.font, self.font_scale, thick)[0] for l in lines]
         tw = max((s[0] for s in sizes), default=0)
         th = line_height * len(lines)
         x, y = POSITIONS.get(self.position, POSITIONS["bottom-left"])(w, h, tw, th)
@@ -221,5 +230,5 @@ class OverlayRenderer:
 
         for i, line in enumerate(lines):
             cv2.putText(frame, line, (x, y + (i + 1) * line_height - 6),
-                        self.font, self.font_scale, self.color, self.thickness, cv2.LINE_AA)
+                        self.font, self.font_scale, self.color, thick, cv2.LINE_AA)
         return frame
